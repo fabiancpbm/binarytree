@@ -3,30 +3,68 @@ import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Responsável por criar um arquivo que possui a ordenação binária do arquivo passado como parâmetro.
  */
 public class BTreeSort {
 
-    private static Page root;
+    /** Raiz da árvore B. */
+    private Page root;
 
     /**
-     * Principal.
+     * Construtor.
      *
-     * @param args Caminho do arquivo que é desejado realizar a ordenação
+     * @param filePath Caminho do arquivo que será estruturado em árvore B.
      */
-    public static void main(String[] args) {
-        // Verificar passagem de argumento.
-        if (args.length != 1) {
-            System.err.println("O argumento não foi passado corretamente: utilize o nome do arquivo que deseja ordenar.");
-            System.exit(1);
-        }
+    public BTreeSort(String filePath) {
+        renderBTree(filePath);
+    }
 
+    /**
+     * Busca um NIS na árvore B.
+     *
+     * @param nis NIS.
+     * @return true, se o NIS procurado existir na estrutura da árvore.
+     */
+    public boolean searchNis(String nis) {
+        return search(root, nis);
+    }
+
+    private boolean search(Page page, String nis) {
+        if (page == null) {
+            return false;
+        }
+        for (Key key : page.keys) {
+            if (nis.compareTo(key.nis) == 0) {
+                return true;
+            } else if (nis.compareTo(key.nis) < 0) {
+                if (key.equals(page.keys.get(0))) {
+                    return search(page.leftPage, nis);
+                } else if (nis.compareTo(page.keys.get(page.keys.indexOf(key) - 1).nis) > 0) {
+                    return search(page.keys.get(page.keys.indexOf(key) - 1).rightPage, nis);
+                } else {
+                    continue;
+                }
+            } else {
+                if (key.equals(page.keys.get(page.keys.size() - 1)) || nis.compareTo(page.keys.get(page.keys.indexOf(key) + 1).nis) < 0) {
+                    return search(key.rightPage, nis);
+                } else {
+                    continue;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Constrói a raiz da árvore B feita para o arquivo B.
+     */
+    private void renderBTree(String filePath) {
         // Testando a existência do arquivo.
         try {
-            RandomAccessFile file = new RandomAccessFile(args[0], "r");
-            file.readLine();
+            RandomAccessFile file = new RandomAccessFile(filePath, "r");
             // Ordenar o arquivo.
             sort(file);
         } catch (FileNotFoundException e) {
@@ -35,7 +73,6 @@ public class BTreeSort {
         } catch (IOException e) {
             System.err.println("Não foi poossível ler o arquivo.");
         }
-
     }
 
     /**
@@ -44,30 +81,40 @@ public class BTreeSort {
      * @param file Arquivo.
      * @throws IOException
      */
-    private static void sort(RandomAccessFile file) throws IOException {
+    private void sort(RandomAccessFile file) throws IOException {
 
         // A quantidade de chaves é o tamanho do bloco dividido pelo tamanho da string do NIS.
         short nisTextSize = 14;
         short blockSize = 1024;
         short keyQtd = (short) (blockSize / nisTextSize);
-        System.out.println("[INFO] - Quantidade de chaves por página.");
+        System.out.println("[INFO] - Quantidade de chaves por página: " + keyQtd);
 
         // Cria a Raíz
         root = new Page(keyQtd);
 
-        root.add(readNis(file));
-
-        insert(root, file);
+        file.readLine();
+        while (file.getFilePointer() < file.length()) {
+            String nis = readNis(file);
+            insert(root, nis);
+        }
     }
 
     /**
      * Função de inserção recursiva.
      *
-     * @param root Raiz.
-     * @param file Arquivo de leitura.
+     * @param page Raiz.
+     * @param nis  NIS.
      */
-    private static void insert(Page root, RandomAccessFile file) {
-
+    private void insert(Page page, String nis) {
+        if (page.isLeaf()) {
+            page.add(new Key(nis));
+            if (page.keys.size() > page.keyQtd) {
+                page.split();
+            }
+        } else {
+            Page childrenPage = page.getNextChildrenPage(nis);
+            insert(childrenPage, nis);
+        }
     }
 
 
@@ -78,7 +125,7 @@ public class BTreeSort {
      * @return NIS.
      * @throws IOException
      */
-    private static String readNis(RandomAccessFile file) throws IOException {
+    private String readNis(RandomAccessFile file) throws IOException {
         String line = file.readLine();
         String columns[] = line.split("\t");
         String nis = columns[7];
@@ -87,24 +134,19 @@ public class BTreeSort {
 
 
     /**
-     * Busca um NIS na árvore B.
-     *
-     * @param nis NIS.
-     * @return true, se o NIS procurado existir na estrutura da árvore.
-     */
-    public static boolean searchNis(String nis) {
-        return false;
-    }
-
-    /**
      * Página com um tamanho passado como parâmetro.
      */
-    private static class Page {
+    private class Page {
 
         /**
          * Capacidade máxima de chaves por página.
          */
         protected short keyQtd;
+
+        /**
+         * Página do pai.
+         */
+        protected Page parent;
 
         /**
          * Página da esquerda.
@@ -129,11 +171,12 @@ public class BTreeSort {
         /**
          * Adiciona um NIS na página.
          *
-         * @param nis NIS a ser adicionado.
+         * @param key Chave.
          */
-        public void add(String nis) {
-            Key key = new Key(nis);
+        public void add(Key key) {
             keys.add(key);
+            keys.sort((o1, o2) -> o1.nis.compareTo(o2.nis));
+
         }
 
         /**
@@ -144,19 +187,76 @@ public class BTreeSort {
         public boolean isLeaf() {
             boolean isKeyLeaf = true;
             for (Key key : keys) {
-                isKeyLeaf = key.rightPage != null;
+                isKeyLeaf = key.rightPage == null;
                 if (!isKeyLeaf) {
                     break;
                 }
             }
             return leftPage == null && isKeyLeaf;
         }
+
+        public Page getNextChildrenPage(String nis) {
+            for (int x = 0; x < keys.size(); x++) {
+                Key key = keys.get(x);
+                if (x == 0 && nis.compareTo(key.nis) < 0 && leftPage != null) {
+                    return leftPage;
+                } else if (nis.compareTo(key.nis) > 0) {
+                    if (x == keys.size() - 1) {
+                        return key.rightPage;
+                    } else if (nis.compareTo(keys.get(x + 1).nis) < 0) {
+                        return key.rightPage;
+                    }
+                }
+            }
+            return null;
+        }
+
+        public void split() {
+            int middle = keys.size() / 2;
+            Page leftPage = copyLeftChildren(middle);
+            Page rightPage = copyRightChildren(middle);
+
+            if (parent == null) {
+                parent = new Page(keyQtd);
+                root = parent;
+            }
+
+            Key promotedKey = keys.get(middle);
+            parent.add(promotedKey);
+            if (parent.keys.size() > parent.keyQtd) {
+                parent.split();
+            }
+
+            if (parent.keys.get(0) == promotedKey) {
+                parent.leftPage = leftPage;
+            } else {
+                parent.keys.get(parent.keys.indexOf(promotedKey) - 1).rightPage = leftPage;
+            }
+            promotedKey.rightPage = rightPage;
+        }
+
+        private Page copyLeftChildren(int middle) {
+            Page page = new Page(keyQtd);
+            for (int i = 0; i < middle; i++) {
+                page.add(keys.get(i));
+            }
+            return page;
+        }
+
+        public Page copyRightChildren(int middle) {
+            middle = middle + 1;
+            Page page = new Page(keyQtd);
+            for (int i = middle; i < keys.size(); i++) {
+                page.add(keys.get(i));
+            }
+            return page;
+        }
     }
 
     /**
      * Chave.
      */
-    private static class Key {
+    private class Key {
         /**
          * NIS.
          */
@@ -174,6 +274,19 @@ public class BTreeSort {
          */
         public Key(String nis) {
             this.nis = nis;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (o == null || getClass() != o.getClass()) return false;
+            Key key = (Key) o;
+            return Objects.equals(nis, key.nis);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(nis);
         }
     }
 }
